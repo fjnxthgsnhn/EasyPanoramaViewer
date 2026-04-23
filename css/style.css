@@ -12,9 +12,12 @@ html, body {
     background: #111;
     color: #fff;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    touch-action: none;
     -webkit-user-select: none;
     user-select: none;
+}
+
+#canvas {
+    touch-action: none;
 }
 
 .hidden {
@@ -228,6 +231,67 @@ html, body {
     text-align: center;
 }
 
+/* トースト通知 */
+.toast {
+    position: fixed;
+    top: 1.5rem;
+    left: 50%;
+    transform: translateX(-50%) translateY(-20px);
+    background: rgba(0,0,0,0.8);
+    color: #fff;
+    padding: 0.75rem 1.5rem;
+    border-radius: 8px;
+    font-size: 0.95rem;
+    z-index: 100;
+    opacity: 0;
+    transition: opacity 0.3s, transform 0.3s;
+    pointer-events: none;
+    max-width: 90vw;
+    text-align: center;
+    word-break: break-word;
+}
+
+.toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+/* safe-area対応 */
+.ui-top-left {
+    top: max(1rem, env(safe-area-inset-top));
+    left: max(1rem, env(safe-area-inset-left));
+}
+
+.ui-top-right {
+    top: max(1rem, env(safe-area-inset-top));
+    right: max(1rem, env(safe-area-inset-right));
+}
+
+.video-controls {
+    bottom: max(1rem, env(safe-area-inset-bottom));
+}
+
+/* タッチターゲット拡大 */
+.icon-btn {
+    width: 48px;
+    height: 48px;
+}
+
+/* Firefox range slider */
+.video-controls input[type="range"]::-moz-range-track {
+    height: 4px;
+    background: rgba(255,255,255,0.3);
+    border-radius: 2px;
+}
+
+.video-controls input[type="range"]::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    background: #e94560;
+    border-radius: 50%;
+    border: none;
+}
+
 /* モバイル対応 */
 @media (max-width: 640px) {
     .drop-content h1 {
@@ -249,7 +313,7 @@ html, body {
     }
 
     .icon-btn {
-        width: 40px;
-        height: 40px;
+        width: 44px;
+        height: 44px;
     }
 }

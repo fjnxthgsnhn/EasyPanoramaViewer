@@ -125,6 +125,8 @@ export class PanoramaViewer {
                 const texture = new THREE.VideoTexture(this.video);
                 texture.colorSpace = THREE.SRGBColorSpace;
                 this.setupSphere(texture);
+                // 動画のメタデータ読み込み後にイベント発火
+                document.dispatchEvent(new Event('panoramaReady'));
                 resolve();
             }, { once: true });
 
@@ -250,10 +252,7 @@ export class PanoramaViewer {
     animate() {
         this.animationId = requestAnimationFrame(this.animate.bind(this));
 
-        if (this.texture && this.texture.isVideoTexture && this.video) {
-            this.texture.needsUpdate = true;
-        }
-
+        // Three.js r160+ VideoTexture は自動更新なので needsUpdate は不要
         this.updateCamera();
         this.renderer.render(this.scene, this.camera);
     }

@@ -52,12 +52,29 @@ dropZone.addEventListener('drop', (e) => {
     }
 });
 
+// ----- トースト通知 -----
+function showToast(message, duration = 3000) {
+    const existing = document.querySelector('.toast');
+    if (existing) existing.remove();
+
+    const toast = document.createElement('div');
+    toast.className = 'toast';
+    toast.textContent = message;
+    document.body.appendChild(toast);
+
+    requestAnimationFrame(() => toast.classList.add('show'));
+    setTimeout(() => {
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 300);
+    }, duration);
+}
+
 // ----- ファイル処理 -----
 async function handleFile(file) {
     const type = file.type;
 
     if (!type.startsWith('image/') && !type.startsWith('video/')) {
-        alert('画像または動画ファイルを選択してください');
+        showToast('画像または動画ファイルを選択してください');
         return;
     }
 
@@ -73,14 +90,21 @@ async function handleFile(file) {
             showVideoControls(false);
         } else {
             await panoramaViewer.loadVideo(file);
+            // モバイル自動再生ポリシー対応: 最初はmutedで再生
+            panoramaViewer.setVideoMuted(true);
+            volumeIcon.classList.add('hidden');
+            muteIcon.classList.remove('hidden');
+            volumeBar.value = 0;
+            await panoramaViewer.playVideo();
             showVideoControls(true);
             updatePlayPauseIcon(true);
+            // updateTimeDisplayはvideoのloadedmetadataイベントで自動開始
         }
 
         switchToViewer();
     } catch (err) {
         console.error(err);
-        alert('ファイルの読み込みに失敗しました');
+        showToast('ファイルの読み込みに失敗しました');
     } finally {
         showLoading(false);
     }
@@ -213,9 +237,19 @@ function updateTimeDisplay() {
     }
 }
 
-// 動画読み込み時にタイム更新を開始
-const originalLoadVideo = PanoramaViewer.prototype.loadVideo;
-PanoramaViewer.prototype.loadVideo = async function(file) {
-    await originalLoadVideo.call(this, file);
-    updateTimeDisplay();
+// 動画読み込み完了後にタイム更新を開始
+let timeUpdateStarted = false;
+
+document.addEventListener('panoramaReady', () => {
+    if (!timeUpdateStarted) {
+        timeUpdateStarted = true;
+        updateTimeDisplay();
+    }
+});
+
+// ビューワー切り替え時にフラグをリセット
+const originalSwitchToDropZone = switchToDropZone;
+switchToDropZone = function() {
+    timeUpdateStarted = false;
+    originalSwitchToDropZone();
 };
