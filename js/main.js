@@ -80,6 +80,9 @@ async function handleFile(file) {
 
     showLoading(true);
 
+    // viewerを先に表示してcanvasサイズを確保（0x0対策）
+    switchToViewer();
+
     try {
         if (!panoramaViewer) {
             panoramaViewer = new PanoramaViewer(canvas);
@@ -100,8 +103,6 @@ async function handleFile(file) {
             updatePlayPauseIcon(true);
             // updateTimeDisplayはvideoのloadedmetadataイベントで自動開始
         }
-
-        switchToViewer();
     } catch (err) {
         console.error(err);
         showToast('ファイルの読み込みに失敗しました');
@@ -114,6 +115,11 @@ async function handleFile(file) {
 function switchToViewer() {
     dropZone.classList.add('hidden');
     viewerEl.classList.remove('hidden');
+
+    // canvasが表示されてからレンダラーサイズを更新（0x0対策）
+    if (panoramaViewer) {
+        setTimeout(() => panoramaViewer.onResize(), 0);
+    }
 }
 
 function switchToDropZone() {
