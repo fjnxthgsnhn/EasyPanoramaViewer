@@ -159,11 +159,10 @@ export class PanoramaViewer {
         this.texture = texture;
 
         const geometry = new THREE.SphereGeometry(500, 60, 40);
-        geometry.scale(-1, 1, 1); // 内側を見るために反転
 
         const material = new THREE.MeshBasicMaterial({
             map: texture,
-            side: THREE.FrontSide,
+            side: THREE.BackSide,
         });
 
         this.mesh = new THREE.Mesh(geometry, material);
