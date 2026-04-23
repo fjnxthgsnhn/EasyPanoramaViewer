@@ -140,20 +140,44 @@ function showVideoControls(show) {
 // ----- 戻る -----
 backBtn.addEventListener('click', switchToDropZone);
 
-// ----- フルスクリーン -----
+// ----- フルスクリーン（ベンダープレフィックス対応） -----
+function isFullscreen() {
+    return !!(document.fullscreenElement || document.webkitFullscreenElement);
+}
+
+async function enterFullscreen() {
+    const el = document.documentElement;
+    if (el.requestFullscreen) {
+        await el.requestFullscreen();
+    } else if (el.webkitRequestFullscreen) {
+        await el.webkitRequestFullscreen();
+    }
+}
+
+async function exitFullscreen() {
+    if (document.exitFullscreen) {
+        await document.exitFullscreen();
+    } else if (document.webkitExitFullscreen) {
+        await document.webkitExitFullscreen();
+    }
+}
+
 fullscreenBtn.addEventListener('click', () => {
-    if (!document.fullscreenElement) {
-        document.documentElement.requestFullscreen().catch(() => {});
+    if (!isFullscreen()) {
+        enterFullscreen().catch(() => {});
     } else {
-        document.exitFullscreen().catch(() => {});
+        exitFullscreen().catch(() => {});
     }
 });
 
-document.addEventListener('fullscreenchange', () => {
-    const isFullscreen = !!document.fullscreenElement;
-    fullscreenIcon.classList.toggle('hidden', isFullscreen);
-    exitFullscreenIcon.classList.toggle('hidden', !isFullscreen);
-});
+function onFullscreenChange() {
+    const fs = isFullscreen();
+    fullscreenIcon.classList.toggle('hidden', fs);
+    exitFullscreenIcon.classList.toggle('hidden', !fs);
+}
+
+document.addEventListener('fullscreenchange', onFullscreenChange);
+document.addEventListener('webkitfullscreenchange', onFullscreenChange);
 
 // ----- 動画コントロール -----
 playPauseBtn.addEventListener('click', () => {

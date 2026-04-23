@@ -19,8 +19,12 @@ export class PanoramaViewer {
         this.minFov = 30;
         this.maxFov = 120;
 
-        // 入力状態
+        // 慣性スクロール
+        this.velocityLon = 0;
+        this.velocityLat = 0;
         this.isDragging = false;
+        this.lastX = 0;
+        this.lastY = 0;
         this.startX = 0;
         this.startY = 0;
         this.startLon = 0;
@@ -28,6 +32,15 @@ export class PanoramaViewer {
 
         // タッチ
         this.lastTouchDist = 0;
+        this.startFov = 75;
+
+        // レンダリング最適化
+        this.needsRender = true;
+
+        // イベントハンドラ（破棄用にバインドして保持）
+        this._onMouseMove = this.onMouseMove.bind(this);
+        this._onMouseUp = this.onMouseUp.bind(this);
+        this._onResize = this.onResize.bind(this);
 
         this.init();
     }
@@ -48,11 +61,12 @@ export class PanoramaViewer {
         this.renderer = new THREE.WebGLRenderer({
             canvas: this.canvas,
             antialias: true,
+            powerPreference: 'high-performance',
         });
         this.renderer.setSize(this.canvas.clientWidth, this.canvas.clientHeight);
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
-        // リサイズ監視
+        // リサイズ監視（window.resize は不要なので使用しない）
         this.resizeObserver = new ResizeObserver(() => this.onResize());
         this.resizeObserver.observe(this.canvas);
 
@@ -64,10 +78,10 @@ export class PanoramaViewer {
     }
 
     bindEvents() {
-        // マウス
+        // マウス（canvas 上で mousedown、window で move/up）
         this.canvas.addEventListener('mousedown', this.onMouseDown.bind(this));
-        window.addEventListener('mousemove', this.onMouseMove.bind(this));
-        window.addEventListener('mouseup', this.onMouseUp.bind(this));
+        window.addEventListener('mousemove', this._onMouseMove);
+        window.addEventListener('mouseup', this._onMouseUp);
 
         // ホイール
         this.canvas.addEventListener('wheel', this.onWheel.bind(this), { passive: false });
@@ -76,9 +90,6 @@ export class PanoramaViewer {
         this.canvas.addEventListener('touchstart', this.onTouchStart.bind(this), { passive: false });
         this.canvas.addEventListener('touchmove', this.onTouchMove.bind(this), { passive: false });
         this.canvas.addEventListener('touchend', this.onTouchEnd.bind(this));
-
-        // 画面回転
-        window.addEventListener('resize', this.onResize.bind(this));
     }
 
     // ----- 画像読み込み -----
@@ -94,8 +105,11 @@ export class PanoramaViewer {
                 url,
                 (texture) => {
                     texture.colorSpace = THREE.SRGBColorSpace;
+                    texture.minFilter = THREE.LinearFilter;
+                    texture.magFilter = THREE.LinearFilter;
                     this.setupSphere(texture);
                     URL.revokeObjectURL(url);
+                    this.needsRender = true;
                     resolve();
                 },
                 undefined,
@@ -124,9 +138,12 @@ export class PanoramaViewer {
             this.video.addEventListener('loadeddata', () => {
                 const texture = new THREE.VideoTexture(this.video);
                 texture.colorSpace = THREE.SRGBColorSpace;
+                texture.minFilter = THREE.LinearFilter;
+                texture.magFilter = THREE.LinearFilter;
                 this.setupSphere(texture);
                 // 動画のメタデータ読み込み後にイベント発火
                 document.dispatchEvent(new Event('panoramaReady'));
+                this.needsRender = true;
                 resolve();
             }, { once: true });
 
@@ -157,6 +174,10 @@ export class PanoramaViewer {
     disposeCurrent() {
         if (this.mesh) {
             this.mesh.geometry.dispose();
+            // material.map の循環参照を切ってから dispose
+            if (this.mesh.material.map) {
+                this.mesh.material.map = null;
+            }
             this.mesh.material.dispose();
             this.scene.remove(this.mesh);
             this.mesh = null;
@@ -170,6 +191,8 @@ export class PanoramaViewer {
             this.texture.dispose();
             this.texture = null;
         }
+        this.velocityLon = 0;
+        this.velocityLat = 0;
     }
 
     // ----- 再生制御 -----
@@ -248,13 +271,44 @@ export class PanoramaViewer {
         this.camera.updateProjectionMatrix();
     }
 
+    // ----- 慣性更新 -----
+    updateInertia() {
+        if (this.isDragging) return;
+
+        // 慣性減衰
+        const friction = 0.92;
+        if (Math.abs(this.velocityLon) > 0.01 || Math.abs(this.velocityLat) > 0.01) {
+            this.lon -= this.velocityLon;
+            this.lat += this.velocityLat;
+            this.velocityLon *= friction;
+            this.velocityLat *= friction;
+            this.needsRender = true;
+        } else {
+            this.velocityLon = 0;
+            this.velocityLat = 0;
+        }
+    }
+
     // ----- レンダー -----
     animate() {
         this.animationId = requestAnimationFrame(this.animate.bind(this));
 
-        // Three.js r160+ VideoTexture は自動更新なので needsUpdate は不要
+        this.updateInertia();
+
+        // 動画は常時レンダリング、静止画は needsRender が true のときのみ
+        if (this.isVideo) {
+            this.needsRender = true;
+        }
+
+        if (!this.needsRender) return;
+
         this.updateCamera();
         this.renderer.render(this.scene, this.camera);
+
+        // 静止画かつ慣性停止中はレンダリングを抑制
+        if (!this.isVideo && !this.isDragging && Math.abs(this.velocityLon) < 0.01 && Math.abs(this.velocityLat) < 0.01) {
+            this.needsRender = false;
+        }
     }
 
     // ----- リサイズ -----
@@ -266,6 +320,7 @@ export class PanoramaViewer {
         this.camera.aspect = w / h;
         this.camera.updateProjectionMatrix();
         this.renderer.setSize(w, h);
+        this.needsRender = true;
     }
 
     // ----- マウスイベント -----
@@ -273,8 +328,13 @@ export class PanoramaViewer {
         this.isDragging = true;
         this.startX = e.clientX;
         this.startY = e.clientY;
+        this.lastX = e.clientX;
+        this.lastY = e.clientY;
         this.startLon = this.lon;
         this.startLat = this.lat;
+        this.velocityLon = 0;
+        this.velocityLat = 0;
+        this.needsRender = true;
     }
 
     onMouseMove(e) {
@@ -283,6 +343,13 @@ export class PanoramaViewer {
         const dy = e.clientY - this.startY;
         this.lon = this.startLon - dx * 0.2;
         this.lat = this.startLat + dy * 0.2;
+
+        // 速度を記録（慣性用）
+        this.velocityLon = (e.clientX - this.lastX) * 0.2;
+        this.velocityLat = (e.clientY - this.lastY) * 0.2;
+        this.lastX = e.clientX;
+        this.lastY = e.clientY;
+        this.needsRender = true;
     }
 
     onMouseUp() {
@@ -294,6 +361,7 @@ export class PanoramaViewer {
         e.preventDefault();
         const delta = e.deltaY * 0.05;
         this.fov = Math.max(this.minFov, Math.min(this.maxFov, this.fov + delta));
+        this.needsRender = true;
     }
 
     // ----- タッチイベント -----
@@ -302,13 +370,19 @@ export class PanoramaViewer {
             this.isDragging = true;
             this.startX = e.touches[0].clientX;
             this.startY = e.touches[0].clientY;
+            this.lastX = e.touches[0].clientX;
+            this.lastY = e.touches[0].clientY;
             this.startLon = this.lon;
             this.startLat = this.lat;
+            this.velocityLon = 0;
+            this.velocityLat = 0;
+            this.needsRender = true;
         } else if (e.touches.length === 2) {
             this.isDragging = false;
             const dx = e.touches[0].clientX - e.touches[1].clientX;
             const dy = e.touches[0].clientY - e.touches[1].clientY;
             this.lastTouchDist = Math.sqrt(dx * dx + dy * dy);
+            this.startFov = this.fov;
         }
     }
 
@@ -319,13 +393,20 @@ export class PanoramaViewer {
             const dy = e.touches[0].clientY - this.startY;
             this.lon = this.startLon - dx * 0.3;
             this.lat = this.startLat + dy * 0.3;
+
+            // 速度を記録（慣性用）
+            this.velocityLon = (e.touches[0].clientX - this.lastX) * 0.3;
+            this.velocityLat = (e.touches[0].clientY - this.lastY) * 0.3;
+            this.lastX = e.touches[0].clientX;
+            this.lastY = e.touches[0].clientY;
+            this.needsRender = true;
         } else if (e.touches.length === 2) {
             const dx = e.touches[0].clientX - e.touches[1].clientX;
             const dy = e.touches[0].clientY - e.touches[1].clientY;
             const dist = Math.sqrt(dx * dx + dy * dy);
-            const delta = this.lastTouchDist - dist;
-            this.fov = Math.max(this.minFov, Math.min(this.maxFov, this.fov + delta * 0.1));
-            this.lastTouchDist = dist;
+            const scale = this.lastTouchDist / dist;
+            this.fov = Math.max(this.minFov, Math.min(this.maxFov, this.startFov * scale));
+            this.needsRender = true;
         }
     }
 
@@ -339,6 +420,11 @@ export class PanoramaViewer {
         cancelAnimationFrame(this.animationId);
         this.resizeObserver.disconnect();
         this.disposeCurrent();
+
+        // window イベントを削除
+        window.removeEventListener('mousemove', this._onMouseMove);
+        window.removeEventListener('mouseup', this._onMouseUp);
+
         this.renderer.dispose();
     }
 }
