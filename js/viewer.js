@@ -167,11 +167,13 @@ export class PanoramaViewer {
     setupSphere(texture) {
         this.texture = texture;
 
-        // BackSide使用時の左右反転を修正
-        texture.wrapS = THREE.RepeatWrapping;
-        texture.repeat.x = -1;
-
         const geometry = new THREE.SphereGeometry(500, 60, 40);
+
+        // BackSide使用時の左右反転をUV座標で修正（より堅牢な方法）
+        const uvAttribute = geometry.attributes.uv;
+        for (let i = 0; i < uvAttribute.count; i++) {
+            uvAttribute.setX(i, 1 - uvAttribute.getX(i)); // U座標を反転
+        }
 
         const material = new THREE.MeshBasicMaterial({
             map: texture,
