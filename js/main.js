@@ -8,6 +8,7 @@ const viewerEl = document.getElementById('viewer');
 const canvas = document.getElementById('canvas');
 const loading = document.getElementById('loading');
 const backBtn = document.getElementById('back-btn');
+const sensorBtn = document.getElementById('sensor-btn');
 const fullscreenBtn = document.getElementById('fullscreen-btn');
 const fullscreenIcon = document.getElementById('fullscreen-icon');
 const exitFullscreenIcon = document.getElementById('exit-fullscreen-icon');
@@ -145,6 +146,23 @@ function showVideoControls(show) {
 
 // ----- 戻る -----
 backBtn.addEventListener('click', switchToDropZone);
+
+// ----- センサーモード -----
+// モバイル端末のみセンサーボタンを表示
+if ('ontouchstart' in window && window.DeviceOrientationEvent) {
+    sensorBtn.classList.remove('hidden');
+}
+
+sensorBtn.addEventListener('click', async () => {
+    if (!panoramaViewer) return;
+    const enabled = await panoramaViewer.toggleSensorMode();
+    sensorBtn.classList.toggle('active', enabled);
+    if (enabled) {
+        showToast('ジャイロモードON：スマホを傾けて操作');
+    } else {
+        showToast('ジャイロモードOFF');
+    }
+});
 
 // ----- フルスクリーン（ベンダープレフィックス対応） -----
 function isFullscreen() {

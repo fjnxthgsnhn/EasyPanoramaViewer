@@ -42,6 +42,14 @@ export class PanoramaViewer {
         this._onMouseUp = this.onMouseUp.bind(this);
         this._onResize = this.onResize.bind(this);
 
+        // デバイスオリエンテーション（ジャイロ）
+        this.sensorMode = false;
+        this.baseBeta = 0;
+        this.baseGamma = 0;
+        this.smoothBeta = 0;
+        this.smoothGamma = 0;
+        this._onDeviceOrientation = this.onDeviceOrientation.bind(this);
+
         this.init();
     }
 
@@ -414,11 +422,81 @@ export class PanoramaViewer {
         this.lastTouchDist = 0;
     }
 
+    // ----- デバイスオリエンテーション -----
+    async toggleSensorMode() {
+        if (this.sensorMode) {
+            this.disableSensorMode();
+            return false;
+        }
+        return await this.enableSensorMode();
+    }
+
+    async enableSensorMode() {
+        // iOS 13+ では権限が必要
+        if (typeof DeviceOrientationEvent !== 'undefined' &&
+            typeof DeviceOrientationEvent.requestPermission === 'function') {
+            try {
+                const response = await DeviceOrientationEvent.requestPermission();
+                if (response !== 'granted') {
+                    return false;
+                }
+            } catch (e) {
+                console.error(e);
+                return false;
+            }
+        }
+
+        this.sensorMode = true;
+        this.baseBeta = 0;
+        this.baseGamma = 0;
+        this.smoothBeta = 0;
+        this.smoothGamma = 0;
+        window.addEventListener('deviceorientation', this._onDeviceOrientation);
+        this.needsRender = true;
+        return true;
+    }
+
+    disableSensorMode() {
+        this.sensorMode = false;
+        window.removeEventListener('deviceorientation', this._onDeviceOrientation);
+    }
+
+    onDeviceOrientation(e) {
+        if (!this.sensorMode) return;
+
+        const beta = e.beta || 0;   // 前後傾き (-180〜180)
+        const gamma = e.gamma || 0; // 左右傾き (-90〜90)
+
+        // 初回は基準値を設定
+        if (this.baseBeta === 0 && this.baseGamma === 0) {
+            this.baseBeta = beta;
+            this.baseGamma = gamma;
+        }
+
+        // 平滑化（移動平均）
+        const alpha = 0.15;
+        this.smoothBeta = this.smoothBeta * (1 - alpha) + (beta - this.baseBeta) * alpha;
+        this.smoothGamma = this.smoothGamma * (1 - alpha) + (gamma - this.baseGamma) * alpha;
+
+        // beta → lat（上下）, gamma → lon（左右）
+        // スケーリング: beta 1度 ≈ lat 1度、gamma 1度 ≈ lon 2度
+        this.lat = Math.max(-85, Math.min(85, this.smoothBeta));
+        this.lon = this.smoothGamma * 2;
+
+        this.needsRender = true;
+    }
+
+    resetSensorBase() {
+        this.baseBeta = 0;
+        this.baseGamma = 0;
+    }
+
     // ----- 破棄 -----
     destroy() {
         cancelAnimationFrame(this.animationId);
         this.resizeObserver.disconnect();
         this.disposeCurrent();
+        this.disableSensorMode();
 
         // window イベントを削除
         window.removeEventListener('mousemove', this._onMouseMove);

@@ -277,6 +277,14 @@ html, body {
     height: 48px;
 }
 
+.icon-btn.active {
+    background: #e94560;
+}
+
+.icon-btn.active:hover {
+    background: #c73e54;
+}
+
 /* Firefox range slider */
 .video-controls input[type="range"]::-moz-range-track {
     height: 4px;
