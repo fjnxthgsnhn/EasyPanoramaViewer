@@ -44,11 +44,12 @@ export class PanoramaViewer {
 
         // デバイスオリエンテーション（ジャイロ）
         this.sensorMode = false;
-        this.baseBeta = 0;
-        this.baseGamma = 0;
+        this.baseBeta = null;
+        this.baseGamma = null;
         this.smoothBeta = 0;
         this.smoothGamma = 0;
         this._onDeviceOrientation = this.onDeviceOrientation.bind(this);
+        this._onOrientationChange = this.onOrientationChange.bind(this);
 
         this.init();
     }
@@ -280,7 +281,7 @@ export class PanoramaViewer {
 
     // ----- 慣性更新 -----
     updateInertia() {
-        if (this.isDragging) return;
+        if (this.isDragging || this.sensorMode) return;
 
         // 慣性減衰
         const friction = 0.92;
@@ -302,8 +303,8 @@ export class PanoramaViewer {
 
         this.updateInertia();
 
-        // 動画は常時レンダリング、静止画は needsRender が true のときのみ
-        if (this.isVideo) {
+        // 動画またはセンサーモード時は常時レンダリング
+        if (this.isVideo || this.sensorMode) {
             this.needsRender = true;
         }
 
@@ -312,8 +313,9 @@ export class PanoramaViewer {
         this.updateCamera();
         this.renderer.render(this.scene, this.camera);
 
-        // 静止画かつ慣性停止中はレンダリングを抑制
-        if (!this.isVideo && !this.isDragging && Math.abs(this.velocityLon) < 0.01 && Math.abs(this.velocityLat) < 0.01) {
+        // 静止画かつ慣性停止中かつセンサーモードOFF時はレンダリングを抑制
+        if (!this.isVideo && !this.isDragging && !this.sensorMode &&
+            Math.abs(this.velocityLon) < 0.01 && Math.abs(this.velocityLat) < 0.01) {
             this.needsRender = false;
         }
     }
@@ -332,6 +334,7 @@ export class PanoramaViewer {
 
     // ----- マウスイベント -----
     onMouseDown(e) {
+        if (this.sensorMode) return;
         this.isDragging = true;
         this.startX = e.clientX;
         this.startY = e.clientY;
@@ -345,7 +348,7 @@ export class PanoramaViewer {
     }
 
     onMouseMove(e) {
-        if (!this.isDragging) return;
+        if (!this.isDragging || this.sensorMode) return;
         const dx = e.clientX - this.startX;
         const dy = e.clientY - this.startY;
         this.lon = this.startLon - dx * 0.2;
@@ -373,6 +376,8 @@ export class PanoramaViewer {
 
     // ----- タッチイベント -----
     onTouchStart(e) {
+        if (this.sensorMode) return; // センサーモード中はタッチドラッグ無効
+
         if (e.touches.length === 1) {
             this.isDragging = true;
             this.startX = e.touches[0].clientX;
@@ -395,6 +400,8 @@ export class PanoramaViewer {
 
     onTouchMove(e) {
         e.preventDefault();
+        if (this.sensorMode) return; // センサーモード中はタッチドラッグ無効
+
         if (e.touches.length === 1 && this.isDragging) {
             const dx = e.touches[0].clientX - this.startX;
             const dy = e.touches[0].clientY - this.startY;
@@ -447,11 +454,14 @@ export class PanoramaViewer {
         }
 
         this.sensorMode = true;
-        this.baseBeta = 0;
-        this.baseGamma = 0;
+        this.baseBeta = null;
+        this.baseGamma = null;
         this.smoothBeta = 0;
         this.smoothGamma = 0;
+        this.velocityLon = 0;
+        this.velocityLat = 0;
         window.addEventListener('deviceorientation', this._onDeviceOrientation);
+        window.addEventListener('orientationchange', this._onOrientationChange);
         this.needsRender = true;
         return true;
     }
@@ -459,16 +469,26 @@ export class PanoramaViewer {
     disableSensorMode() {
         this.sensorMode = false;
         window.removeEventListener('deviceorientation', this._onDeviceOrientation);
+        window.removeEventListener('orientationchange', this._onOrientationChange);
+        this.velocityLon = 0;
+        this.velocityLat = 0;
+        this.needsRender = true;
     }
 
     onDeviceOrientation(e) {
         if (!this.sensorMode) return;
 
-        const beta = e.beta || 0;   // 前後傾き (-180〜180)
-        const gamma = e.gamma || 0; // 左右傾き (-90〜90)
+        let beta = e.beta || 0;   // 前後傾き (-180〜180)
+        let gamma = e.gamma || 0; // 左右傾き (-90〜90)
+
+        // 境界値のラップアラウンド処理
+        if (beta > 150) beta -= 360;
+        if (beta < -150) beta += 360;
+        if (gamma > 80) gamma -= 180;
+        if (gamma < -80) gamma += 180;
 
         // 初回は基準値を設定
-        if (this.baseBeta === 0 && this.baseGamma === 0) {
+        if (this.baseBeta === null || this.baseGamma === null) {
             this.baseBeta = beta;
             this.baseGamma = gamma;
         }
@@ -479,16 +499,21 @@ export class PanoramaViewer {
         this.smoothGamma = this.smoothGamma * (1 - alpha) + (gamma - this.baseGamma) * alpha;
 
         // beta → lat（上下）, gamma → lon（左右）
-        // スケーリング: beta 1度 ≈ lat 1度、gamma 1度 ≈ lon 2度
+        // gamma 2倍スケールで視野移動を自然に
         this.lat = Math.max(-85, Math.min(85, this.smoothBeta));
-        this.lon = this.smoothGamma * 2;
+        this.lon = this.smoothGamma * 2.0;
 
         this.needsRender = true;
     }
 
+    onOrientationChange() {
+        // 画面回転時に基準値をリセット
+        this.resetSensorBase();
+    }
+
     resetSensorBase() {
-        this.baseBeta = 0;
-        this.baseGamma = 0;
+        this.baseBeta = null;
+        this.baseGamma = null;
     }
 
     // ----- 破棄 -----

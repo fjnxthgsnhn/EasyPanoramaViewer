@@ -148,8 +148,9 @@ function showVideoControls(show) {
 backBtn.addEventListener('click', switchToDropZone);
 
 // ----- センサーモード -----
-// モバイル端末のみセンサーボタンを表示
-if ('ontouchstart' in window && window.DeviceOrientationEvent) {
+// モバイル端末のみセンサーボタンを表示（タッチデバイスかつセンサー対応）
+const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+if (isMobile && 'ontouchstart' in window && window.DeviceOrientationEvent) {
     sensorBtn.classList.remove('hidden');
 }
 
@@ -158,7 +159,7 @@ sensorBtn.addEventListener('click', async () => {
     const enabled = await panoramaViewer.toggleSensorMode();
     sensorBtn.classList.toggle('active', enabled);
     if (enabled) {
-        showToast('ジャイロモードON：スマホを傾けて操作');
+        showToast('ジャイロモードON：スマホを傾けて360°見回せます');
     } else {
         showToast('ジャイロモードOFF');
     }
