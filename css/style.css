@@ -23,7 +23,6 @@ html, body {
     display: none !important;
 }
 
-/* ドロップゾーン */
 .drop-zone {
     width: 100%;
     height: 100%;
@@ -69,19 +68,12 @@ html, body {
     -webkit-tap-highlight-color: transparent;
 }
 
-.btn:hover {
-    background: #c73e54;
-}
+.btn:hover { background: #c73e54; }
+.btn:active { transform: scale(0.98); }
 
-.btn:active {
-    transform: scale(0.98);
-}
-
-/* ビューワー */
 .viewer {
     position: fixed;
-    top: 0;
-    left: 0;
+    inset: 0;
     width: 100%;
     height: 100%;
     z-index: 10;
@@ -93,7 +85,6 @@ html, body {
     height: 100%;
 }
 
-/* ローディング */
 .loading {
     position: absolute;
     top: 50%;
@@ -114,32 +105,25 @@ html, body {
     animation: spin 1s linear infinite;
 }
 
-@keyframes spin {
-    to { transform: rotate(360deg); }
-}
+@keyframes spin { to { transform: rotate(360deg); } }
 
-/* UIオーバーレイ */
 .ui-overlay {
     position: absolute;
-    top: 0;
-    left: 0;
+    inset: 0;
     width: 100%;
     height: 100%;
     z-index: 20;
     pointer-events: none;
 }
 
-.ui-overlay > * {
-    pointer-events: auto;
-}
+.ui-overlay > * { pointer-events: auto; }
 
-/* アイコンボタン */
 .icon-btn {
     background: rgba(0,0,0,0.5);
     border: none;
     color: #fff;
-    width: 44px;
-    height: 44px;
+    width: 48px;
+    height: 48px;
     border-radius: 50%;
     display: flex;
     align-items: center;
@@ -149,34 +133,135 @@ html, body {
     -webkit-tap-highlight-color: transparent;
 }
 
-.icon-btn:hover {
-    background: rgba(0,0,0,0.7);
-}
+.icon-btn:hover { background: rgba(0,0,0,0.7); }
+.icon-btn svg { width: 24px; height: 24px; }
+.icon-btn.active { background: #e94560; }
+.icon-btn.active:hover { background: #c73e54; }
 
-.icon-btn svg {
-    width: 24px;
-    height: 24px;
-}
-
-/* 位置指定 */
 .ui-top-left {
     position: absolute;
-    top: 1rem;
-    left: 1rem;
+    top: max(1rem, env(safe-area-inset-top));
+    left: max(1rem, env(safe-area-inset-left));
 }
 
 .ui-top-right {
     position: absolute;
-    top: 1rem;
-    right: 1rem;
+    top: max(1rem, env(safe-area-inset-top));
+    right: max(1rem, env(safe-area-inset-right));
     display: flex;
     gap: 0.75rem;
 }
 
-/* 動画コントロール */
+.capture-panel {
+    position: absolute;
+    top: calc(max(1rem, env(safe-area-inset-top)) + 60px);
+    right: max(1rem, env(safe-area-inset-right));
+    width: min(360px, calc(100vw - 2rem));
+    padding: 1rem;
+    background: rgba(14, 14, 18, 0.88);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 12px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+}
+
+.capture-row {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    flex-wrap: wrap;
+}
+
+.capture-row label {
+    font-size: 0.85rem;
+    color: #ccc;
+}
+
+.capture-row select,
+.capture-row input {
+    min-height: 36px;
+    padding: 0.35rem 0.55rem;
+    color: #fff;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.16);
+    border-radius: 6px;
+    outline: none;
+}
+
+.capture-row select { flex: 1; min-width: 110px; }
+.capture-row option { color: #111; }
+
+.custom-ratio {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    width: 100%;
+}
+
+.custom-ratio input {
+    width: 72px;
+    text-align: center;
+}
+
+.capture-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.65rem;
+    margin-top: 0.85rem;
+}
+
+.capture-action-btn {
+    min-height: 42px;
+    padding: 0.55rem 0.8rem;
+    color: #fff;
+    background: rgba(255,255,255,0.12);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: background 0.2s, border-color 0.2s, opacity 0.2s;
+}
+
+.capture-action-btn:hover { background: rgba(255,255,255,0.2); }
+.capture-action-btn.record { background: rgba(233,69,96,0.28); border-color: rgba(233,69,96,0.55); }
+.capture-action-btn.record:hover { background: rgba(233,69,96,0.4); }
+.capture-action-btn.record.active { background: #e94560; border-color: #e94560; }
+.capture-action-btn:disabled { cursor: wait; opacity: 0.55; }
+
+.recording-status {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    margin-top: 0.75rem;
+    color: #ff7a91;
+    font-size: 0.82rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.recording-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #e94560;
+    animation: rec-pulse 1s ease-in-out infinite;
+}
+
+@keyframes rec-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.45; transform: scale(0.82); }
+}
+
+.capture-note {
+    margin-top: 0.7rem;
+    color: #999;
+    font-size: 0.72rem;
+    line-height: 1.5;
+}
+
 .video-controls {
     position: absolute;
-    bottom: 1rem;
+    bottom: max(1rem, env(safe-area-inset-bottom));
     left: 50%;
     transform: translateX(-50%);
     display: flex;
@@ -214,15 +299,22 @@ html, body {
     margin-top: -5px;
 }
 
-#seek-bar {
-    width: 200px;
-    flex: 1;
-    min-width: 120px;
+.video-controls input[type="range"]::-moz-range-track {
+    height: 4px;
+    background: rgba(255,255,255,0.3);
+    border-radius: 2px;
 }
 
-#volume-bar {
-    width: 80px;
+.video-controls input[type="range"]::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    background: #e94560;
+    border-radius: 50%;
+    border: none;
 }
+
+#seek-bar { width: 200px; flex: 1; min-width: 120px; }
+#volume-bar { width: 80px; }
 
 #time-display {
     font-size: 0.8rem;
@@ -232,7 +324,6 @@ html, body {
     text-align: center;
 }
 
-/* トースト通知 */
 .toast {
     position: fixed;
     top: 1.5rem;
@@ -257,72 +348,12 @@ html, body {
     transform: translateX(-50%) translateY(0);
 }
 
-/* safe-area対応 */
-.ui-top-left {
-    top: max(1rem, env(safe-area-inset-top));
-    left: max(1rem, env(safe-area-inset-left));
-}
-
-.ui-top-right {
-    top: max(1rem, env(safe-area-inset-top));
-    right: max(1rem, env(safe-area-inset-right));
-}
-
-.video-controls {
-    bottom: max(1rem, env(safe-area-inset-bottom));
-}
-
-/* タッチターゲット拡大 */
-.icon-btn {
-    width: 48px;
-    height: 48px;
-}
-
-.icon-btn.active {
-    background: #e94560;
-}
-
-.icon-btn.active:hover {
-    background: #c73e54;
-}
-
-/* Firefox range slider */
-.video-controls input[type="range"]::-moz-range-track {
-    height: 4px;
-    background: rgba(255,255,255,0.3);
-    border-radius: 2px;
-}
-
-.video-controls input[type="range"]::-moz-range-thumb {
-    width: 14px;
-    height: 14px;
-    background: #e94560;
-    border-radius: 50%;
-    border: none;
-}
-
-/* モバイル対応 */
 @media (max-width: 640px) {
-    .drop-content h1 {
-        font-size: 1.5rem;
-    }
-
-    .video-controls {
-        gap: 0.5rem;
-        padding: 0.4rem 0.75rem;
-    }
-
-    #seek-bar {
-        width: 140px;
-    }
-
-    #time-display {
-        font-size: 0.7rem;
-        min-width: 75px;
-    }
-
-    .icon-btn {
-        width: 44px;
-        height: 44px;
-    }
+    .drop-content h1 { font-size: 1.5rem; }
+    .ui-top-right { gap: 0.5rem; }
+    .video-controls { gap: 0.5rem; padding: 0.4rem 0.75rem; }
+    #seek-bar { width: 140px; }
+    #time-display { font-size: 0.7rem; min-width: 75px; }
+    .icon-btn { width: 44px; height: 44px; }
+    .capture-panel { top: calc(max(1rem, env(safe-area-inset-top)) + 54px); }
 }

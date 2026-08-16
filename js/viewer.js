@@ -9,6 +9,7 @@ export class PanoramaViewer {
         this.mesh = null;
         this.texture = null;
         this.video = null;
+        this.objectUrl = null;
         this.isVideo = false;
         this.animationId = null;
 
@@ -34,13 +35,13 @@ export class PanoramaViewer {
         this.lastTouchDist = 0;
         this.startFov = 75;
 
-        // レンダリング最適化
+        // レンダリング最適化 / 録画
         this.needsRender = true;
-
-        // イベントハンドラ（破棄用にバインドして保持）
-        this._onMouseMove = this.onMouseMove.bind(this);
-        this._onMouseUp = this.onMouseUp.bind(this);
-        this._onResize = this.onResize.bind(this);
+        this.isRecording = false;
+        this.mediaRecorder = null;
+        this.recordedChunks = [];
+        this.recordingStream = null;
+        this.sourceCaptureStream = null;
 
         // デバイスオリエンテーション（ジャイロ）
         this.sensorMode = false;
@@ -48,57 +49,53 @@ export class PanoramaViewer {
         this.baseGamma = null;
         this.smoothBeta = 0;
         this.smoothGamma = 0;
+
+        // 破棄時に確実に外せるようハンドラを保持
+        this._onMouseDown = this.onMouseDown.bind(this);
+        this._onMouseMove = this.onMouseMove.bind(this);
+        this._onMouseUp = this.onMouseUp.bind(this);
+        this._onWheel = this.onWheel.bind(this);
+        this._onTouchStart = this.onTouchStart.bind(this);
+        this._onTouchMove = this.onTouchMove.bind(this);
+        this._onTouchEnd = this.onTouchEnd.bind(this);
         this._onDeviceOrientation = this.onDeviceOrientation.bind(this);
         this._onOrientationChange = this.onOrientationChange.bind(this);
+        this._animate = this.animate.bind(this);
 
         this.init();
     }
 
     init() {
-        // シーン
         this.scene = new THREE.Scene();
 
-        // カメラ
-        this.camera = new THREE.PerspectiveCamera(
-            this.fov,
-            this.canvas.clientWidth / this.canvas.clientHeight,
-            0.1,
-            1000
-        );
+        const width = Math.max(this.canvas.clientWidth, 1);
+        const height = Math.max(this.canvas.clientHeight, 1);
+        this.camera = new THREE.PerspectiveCamera(this.fov, width / height, 0.1, 1000);
 
-        // レンダラー
         this.renderer = new THREE.WebGLRenderer({
             canvas: this.canvas,
             antialias: true,
             powerPreference: 'high-performance',
         });
-        this.renderer.setSize(this.canvas.clientWidth, this.canvas.clientHeight);
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+        this.renderer.setSize(width, height, false);
 
-        // リサイズ監視（window.resize は不要なので使用しない）
         this.resizeObserver = new ResizeObserver(() => this.onResize());
         this.resizeObserver.observe(this.canvas);
 
-        // イベント
         this.bindEvents();
-
-        // レンダーループ
         this.animate();
     }
 
     bindEvents() {
-        // マウス（canvas 上で mousedown、window で move/up）
-        this.canvas.addEventListener('mousedown', this.onMouseDown.bind(this));
+        this.canvas.addEventListener('mousedown', this._onMouseDown);
         window.addEventListener('mousemove', this._onMouseMove);
         window.addEventListener('mouseup', this._onMouseUp);
-
-        // ホイール
-        this.canvas.addEventListener('wheel', this.onWheel.bind(this), { passive: false });
-
-        // タッチ
-        this.canvas.addEventListener('touchstart', this.onTouchStart.bind(this), { passive: false });
-        this.canvas.addEventListener('touchmove', this.onTouchMove.bind(this), { passive: false });
-        this.canvas.addEventListener('touchend', this.onTouchEnd.bind(this));
+        this.canvas.addEventListener('wheel', this._onWheel, { passive: false });
+        this.canvas.addEventListener('touchstart', this._onTouchStart, { passive: false });
+        this.canvas.addEventListener('touchmove', this._onTouchMove, { passive: false });
+        this.canvas.addEventListener('touchend', this._onTouchEnd);
     }
 
     // ----- 画像読み込み -----
@@ -122,9 +119,9 @@ export class PanoramaViewer {
                     resolve();
                 },
                 undefined,
-                (err) => {
+                (error) => {
                     URL.revokeObjectURL(url);
-                    reject(err);
+                    reject(error);
                 }
             );
         });
@@ -136,12 +133,13 @@ export class PanoramaViewer {
             this.disposeCurrent();
             this.isVideo = true;
 
-            const url = URL.createObjectURL(file);
+            this.objectUrl = URL.createObjectURL(file);
             this.video = document.createElement('video');
-            this.video.src = url;
+            this.video.src = this.objectUrl;
             this.video.crossOrigin = 'anonymous';
             this.video.loop = true;
             this.video.playsInline = true;
+            this.video.preload = 'auto';
             this.video.muted = false;
 
             this.video.addEventListener('loadeddata', () => {
@@ -150,15 +148,14 @@ export class PanoramaViewer {
                 texture.minFilter = THREE.LinearFilter;
                 texture.magFilter = THREE.LinearFilter;
                 this.setupSphere(texture);
-                // 動画のメタデータ読み込み後にイベント発火
                 document.dispatchEvent(new Event('panoramaReady'));
                 this.needsRender = true;
                 resolve();
             }, { once: true });
 
-            this.video.addEventListener('error', (e) => {
-                URL.revokeObjectURL(url);
-                reject(e);
+            this.video.addEventListener('error', (event) => {
+                this.releaseObjectUrl();
+                reject(event);
             }, { once: true });
         });
     }
@@ -167,28 +164,31 @@ export class PanoramaViewer {
     setupSphere(texture) {
         this.texture = texture;
 
+        // Three.js の標準的なパノラマ表示方式。
+        // 球体を X 軸反転して内側を正面として描画することで、
+        // BackSide + UV反転による左右反転を避ける。
         const geometry = new THREE.SphereGeometry(500, 60, 40);
+        geometry.scale(-1, 1, 1);
 
-        // BackSide使用時の左右反転をUV座標で修正（より堅牢な方法）
-        const uvAttribute = geometry.attributes.uv;
-        for (let i = 0; i < uvAttribute.count; i++) {
-            uvAttribute.setX(i, 1 - uvAttribute.getX(i)); // U座標を反転
-        }
-
-        const material = new THREE.MeshBasicMaterial({
-            map: texture,
-            side: THREE.BackSide,
-        });
-
+        const material = new THREE.MeshBasicMaterial({ map: texture });
         this.mesh = new THREE.Mesh(geometry, material);
         this.scene.add(this.mesh);
     }
 
-    // ----- 破棄 -----
+    releaseObjectUrl() {
+        if (this.objectUrl) {
+            URL.revokeObjectURL(this.objectUrl);
+            this.objectUrl = null;
+        }
+    }
+
     disposeCurrent() {
+        if (this.isRecording) {
+            this.stopRecording().catch(() => {});
+        }
+
         if (this.mesh) {
             this.mesh.geometry.dispose();
-            // material.map の循環参照を切ってから dispose
             if (this.mesh.material.map) {
                 this.mesh.material.map = null;
             }
@@ -196,30 +196,32 @@ export class PanoramaViewer {
             this.scene.remove(this.mesh);
             this.mesh = null;
         }
+
+        if (this.video) {
+            this.video.pause();
+            this.video.removeAttribute('src');
+            this.video.load();
+            this.video = null;
+        }
+
         if (this.texture) {
-            if (this.texture.isVideoTexture && this.video) {
-                this.video.pause();
-                URL.revokeObjectURL(this.video.src);
-                this.video = null;
-            }
             this.texture.dispose();
             this.texture = null;
         }
+
+        this.releaseObjectUrl();
+        this.isVideo = false;
         this.velocityLon = 0;
         this.velocityLat = 0;
     }
 
     // ----- 再生制御 -----
     playVideo() {
-        if (this.video) {
-            this.video.play();
-        }
+        return this.video ? this.video.play() : Promise.resolve();
     }
 
     pauseVideo() {
-        if (this.video) {
-            this.video.pause();
-        }
+        if (this.video) this.video.pause();
     }
 
     isVideoPlaying() {
@@ -227,13 +229,13 @@ export class PanoramaViewer {
     }
 
     seekVideo(ratio) {
-        if (this.video && isFinite(this.video.duration)) {
-            this.video.currentTime = this.video.duration * ratio;
+        if (this.video && Number.isFinite(this.video.duration)) {
+            this.video.currentTime = this.video.duration * Math.max(0, Math.min(1, ratio));
         }
     }
 
     getVideoProgress() {
-        if (this.video && isFinite(this.video.duration) && this.video.duration > 0) {
+        if (this.video && Number.isFinite(this.video.duration) && this.video.duration > 0) {
             return this.video.currentTime / this.video.duration;
         }
         return 0;
@@ -247,10 +249,8 @@ export class PanoramaViewer {
         return this.video ? this.video.currentTime : 0;
     }
 
-    setVideoVolume(vol) {
-        if (this.video) {
-            this.video.volume = vol;
-        }
+    setVideoVolume(volume) {
+        if (this.video) this.video.volume = Math.max(0, Math.min(1, volume));
     }
 
     getVideoVolume() {
@@ -258,38 +258,212 @@ export class PanoramaViewer {
     }
 
     setVideoMuted(muted) {
-        if (this.video) {
-            this.video.muted = muted;
-        }
+        if (this.video) this.video.muted = muted;
     }
 
     getVideoMuted() {
         return this.video ? this.video.muted : false;
     }
 
+    // ----- スクリーンショット -----
+    async captureScreenshot(aspectRatio, shortEdge = 1080) {
+        if (!this.mesh || !this.renderer) {
+            throw new Error('パノラマが読み込まれていません');
+        }
+
+        const safeAspect = Number.isFinite(aspectRatio) && aspectRatio > 0
+            ? Math.max(0.1, Math.min(10, aspectRatio))
+            : this.camera.aspect;
+
+        let width;
+        let height;
+        if (safeAspect >= 1) {
+            height = shortEdge;
+            width = Math.round(shortEdge * safeAspect);
+        } else {
+            width = shortEdge;
+            height = Math.round(shortEdge / safeAspect);
+        }
+
+        const maxDimension = 3840;
+        const scale = Math.min(1, maxDimension / Math.max(width, height));
+        width = Math.max(2, Math.round(width * scale));
+        height = Math.max(2, Math.round(height * scale));
+
+        const captureCanvas = document.createElement('canvas');
+        const captureRenderer = new THREE.WebGLRenderer({
+            canvas: captureCanvas,
+            antialias: true,
+            preserveDrawingBuffer: true,
+            powerPreference: 'high-performance',
+        });
+        captureRenderer.outputColorSpace = this.renderer.outputColorSpace;
+        captureRenderer.toneMapping = this.renderer.toneMapping;
+        captureRenderer.toneMappingExposure = this.renderer.toneMappingExposure;
+        captureRenderer.setPixelRatio(1);
+        captureRenderer.setSize(width, height, false);
+
+        const originalAspect = this.camera.aspect;
+        try {
+            this.camera.aspect = width / height;
+            this.camera.updateProjectionMatrix();
+            this.updateCameraDirection();
+            captureRenderer.render(this.scene, this.camera);
+
+            const blob = await new Promise((resolve, reject) => {
+                captureCanvas.toBlob((result) => {
+                    if (result) resolve(result);
+                    else reject(new Error('PNGの生成に失敗しました'));
+                }, 'image/png');
+            });
+
+            return { blob, width, height };
+        } finally {
+            this.camera.aspect = originalAspect;
+            this.camera.updateProjectionMatrix();
+            captureRenderer.dispose();
+            if (typeof captureRenderer.forceContextLoss === 'function') {
+                captureRenderer.forceContextLoss();
+            }
+            this.needsRender = true;
+        }
+    }
+
+    // ----- 動画撮影 -----
+    getSupportedRecordingMimeType() {
+        if (typeof MediaRecorder === 'undefined') return '';
+
+        const candidates = [
+            'video/webm;codecs=vp9',
+            'video/webm;codecs=vp8',
+            'video/webm',
+            'video/mp4;codecs=avc1.42E01E',
+            'video/mp4',
+        ];
+        return candidates.find((type) => MediaRecorder.isTypeSupported(type)) || '';
+    }
+
+    startRecording({ fps = 30, videoBitsPerSecond = 10_000_000 } = {}) {
+        if (!this.mesh) throw new Error('パノラマが読み込まれていません');
+        if (typeof this.canvas.captureStream !== 'function' || typeof MediaRecorder === 'undefined') {
+            throw new Error('このブラウザは動画撮影に対応していません');
+        }
+        if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+            throw new Error('すでに録画中です');
+        }
+
+        const canvasStream = this.canvas.captureStream(fps);
+        const tracks = [...canvasStream.getVideoTracks()];
+        this.sourceCaptureStream = null;
+
+        // 元が360動画の場合、対応ブラウザでは音声トラックも録画へ合流する。
+        if (this.video) {
+            const captureVideoStream = this.video.captureStream || this.video.mozCaptureStream;
+            if (typeof captureVideoStream === 'function') {
+                try {
+                    this.sourceCaptureStream = captureVideoStream.call(this.video);
+                    tracks.push(...this.sourceCaptureStream.getAudioTracks());
+                } catch (error) {
+                    console.warn('動画音声のキャプチャを開始できませんでした', error);
+                }
+            }
+        }
+
+        this.recordingStream = new MediaStream(tracks);
+        this.recordedChunks = [];
+
+        const mimeType = this.getSupportedRecordingMimeType();
+        const options = { videoBitsPerSecond };
+        if (mimeType) options.mimeType = mimeType;
+
+        this.mediaRecorder = new MediaRecorder(this.recordingStream, options);
+        this.mediaRecorder.addEventListener('dataavailable', (event) => {
+            if (event.data && event.data.size > 0) {
+                this.recordedChunks.push(event.data);
+            }
+        });
+
+        this.mediaRecorder.start(250);
+        this.isRecording = true;
+        this.needsRender = true;
+
+        const actualMimeType = this.mediaRecorder.mimeType || mimeType || 'video/webm';
+        return {
+            mimeType: actualMimeType,
+            extension: actualMimeType.includes('mp4') ? 'mp4' : 'webm',
+        };
+    }
+
+    stopRecording() {
+        return new Promise((resolve, reject) => {
+            if (!this.mediaRecorder || this.mediaRecorder.state === 'inactive') {
+                this.cleanupRecordingStreams();
+                this.isRecording = false;
+                reject(new Error('録画中ではありません'));
+                return;
+            }
+
+            const recorder = this.mediaRecorder;
+            const mimeType = recorder.mimeType || 'video/webm';
+
+            const finish = () => {
+                const blob = new Blob(this.recordedChunks, { type: mimeType });
+                const extension = mimeType.includes('mp4') ? 'mp4' : 'webm';
+                this.recordedChunks = [];
+                this.mediaRecorder = null;
+                this.isRecording = false;
+                this.cleanupRecordingStreams();
+                this.needsRender = true;
+                resolve({ blob, mimeType, extension });
+            };
+
+            recorder.addEventListener('stop', finish, { once: true });
+            recorder.addEventListener('error', (event) => {
+                this.mediaRecorder = null;
+                this.recordedChunks = [];
+                this.isRecording = false;
+                this.cleanupRecordingStreams();
+                reject(event.error || new Error('録画に失敗しました'));
+            }, { once: true });
+
+            recorder.stop();
+        });
+    }
+
+    cleanupRecordingStreams() {
+        if (this.recordingStream) {
+            this.recordingStream.getTracks().forEach((track) => track.stop());
+            this.recordingStream = null;
+        }
+        if (this.sourceCaptureStream) {
+            this.sourceCaptureStream.getTracks().forEach((track) => track.stop());
+            this.sourceCaptureStream = null;
+        }
+    }
+
     // ----- カメラ更新 -----
-    updateCamera() {
-        // latを-85〜85度に制限
+    updateCameraDirection() {
         this.lat = Math.max(-85, Math.min(85, this.lat));
 
         const phi = THREE.MathUtils.degToRad(90 - this.lat);
         const theta = THREE.MathUtils.degToRad(this.lon);
-
         const x = 500 * Math.sin(phi) * Math.cos(theta);
         const y = 500 * Math.cos(phi);
         const z = 500 * Math.sin(phi) * Math.sin(theta);
 
         this.camera.position.set(0, 0, 0);
         this.camera.lookAt(x, y, z);
+    }
+
+    updateCamera() {
+        this.updateCameraDirection();
         this.camera.fov = this.fov;
         this.camera.updateProjectionMatrix();
     }
 
-    // ----- 慣性更新 -----
     updateInertia() {
         if (this.isDragging || this.sensorMode) return;
 
-        // 慣性減衰
         const friction = 0.92;
         if (Math.abs(this.velocityLon) > 0.01 || Math.abs(this.velocityLat) > 0.01) {
             this.lon -= this.velocityLon;
@@ -303,49 +477,44 @@ export class PanoramaViewer {
         }
     }
 
-    // ----- レンダー -----
     animate() {
-        this.animationId = requestAnimationFrame(this.animate.bind(this));
-
+        this.animationId = requestAnimationFrame(this._animate);
         this.updateInertia();
 
-        // 動画またはセンサーモード時は常時レンダリング
-        if (this.isVideo || this.sensorMode) {
+        if (this.isVideo || this.sensorMode || this.isRecording) {
             this.needsRender = true;
         }
-
         if (!this.needsRender) return;
 
         this.updateCamera();
         this.renderer.render(this.scene, this.camera);
 
-        // 静止画かつ慣性停止中かつセンサーモードOFF時はレンダリングを抑制
-        if (!this.isVideo && !this.isDragging && !this.sensorMode &&
+        if (!this.isVideo && !this.isDragging && !this.sensorMode && !this.isRecording &&
             Math.abs(this.velocityLon) < 0.01 && Math.abs(this.velocityLat) < 0.01) {
             this.needsRender = false;
         }
     }
 
-    // ----- リサイズ -----
     onResize() {
-        const w = this.canvas.clientWidth;
-        const h = this.canvas.clientHeight;
-        if (w === 0 || h === 0) return;
+        const width = this.canvas.clientWidth;
+        const height = this.canvas.clientHeight;
+        if (!width || !height || !this.renderer || !this.camera) return;
 
-        this.camera.aspect = w / h;
+        this.camera.aspect = width / height;
         this.camera.updateProjectionMatrix();
-        this.renderer.setSize(w, h);
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+        this.renderer.setSize(width, height, false);
         this.needsRender = true;
     }
 
-    // ----- マウスイベント -----
-    onMouseDown(e) {
+    // ----- マウス -----
+    onMouseDown(event) {
         if (this.sensorMode) return;
         this.isDragging = true;
-        this.startX = e.clientX;
-        this.startY = e.clientY;
-        this.lastX = e.clientX;
-        this.lastY = e.clientY;
+        this.startX = event.clientX;
+        this.startY = event.clientY;
+        this.lastX = event.clientX;
+        this.lastY = event.clientY;
         this.startLon = this.lon;
         this.startLat = this.lat;
         this.velocityLon = 0;
@@ -353,18 +522,16 @@ export class PanoramaViewer {
         this.needsRender = true;
     }
 
-    onMouseMove(e) {
+    onMouseMove(event) {
         if (!this.isDragging || this.sensorMode) return;
-        const dx = e.clientX - this.startX;
-        const dy = e.clientY - this.startY;
+        const dx = event.clientX - this.startX;
+        const dy = event.clientY - this.startY;
         this.lon = this.startLon - dx * 0.2;
         this.lat = this.startLat + dy * 0.2;
-
-        // 速度を記録（慣性用）
-        this.velocityLon = (e.clientX - this.lastX) * 0.2;
-        this.velocityLat = (e.clientY - this.lastY) * 0.2;
-        this.lastX = e.clientX;
-        this.lastY = e.clientY;
+        this.velocityLon = (event.clientX - this.lastX) * 0.2;
+        this.velocityLat = (event.clientY - this.lastY) * 0.2;
+        this.lastX = event.clientX;
+        this.lastY = event.clientY;
         this.needsRender = true;
     }
 
@@ -372,61 +539,62 @@ export class PanoramaViewer {
         this.isDragging = false;
     }
 
-    // ----- ホイール -----
-    onWheel(e) {
-        e.preventDefault();
-        const delta = e.deltaY * 0.05;
+    onWheel(event) {
+        event.preventDefault();
+        const delta = event.deltaY * 0.05;
         this.fov = Math.max(this.minFov, Math.min(this.maxFov, this.fov + delta));
         this.needsRender = true;
     }
 
-    // ----- タッチイベント -----
-    onTouchStart(e) {
-        if (this.sensorMode) return; // センサーモード中はタッチドラッグ無効
+    // ----- タッチ -----
+    onTouchStart(event) {
+        if (this.sensorMode) return;
 
-        if (e.touches.length === 1) {
+        if (event.touches.length === 1) {
+            const touch = event.touches[0];
             this.isDragging = true;
-            this.startX = e.touches[0].clientX;
-            this.startY = e.touches[0].clientY;
-            this.lastX = e.touches[0].clientX;
-            this.lastY = e.touches[0].clientY;
+            this.startX = touch.clientX;
+            this.startY = touch.clientY;
+            this.lastX = touch.clientX;
+            this.lastY = touch.clientY;
             this.startLon = this.lon;
             this.startLat = this.lat;
             this.velocityLon = 0;
             this.velocityLat = 0;
             this.needsRender = true;
-        } else if (e.touches.length === 2) {
+        } else if (event.touches.length === 2) {
             this.isDragging = false;
-            const dx = e.touches[0].clientX - e.touches[1].clientX;
-            const dy = e.touches[0].clientY - e.touches[1].clientY;
-            this.lastTouchDist = Math.sqrt(dx * dx + dy * dy);
+            const dx = event.touches[0].clientX - event.touches[1].clientX;
+            const dy = event.touches[0].clientY - event.touches[1].clientY;
+            this.lastTouchDist = Math.hypot(dx, dy);
             this.startFov = this.fov;
         }
     }
 
-    onTouchMove(e) {
-        e.preventDefault();
-        if (this.sensorMode) return; // センサーモード中はタッチドラッグ無効
+    onTouchMove(event) {
+        event.preventDefault();
+        if (this.sensorMode) return;
 
-        if (e.touches.length === 1 && this.isDragging) {
-            const dx = e.touches[0].clientX - this.startX;
-            const dy = e.touches[0].clientY - this.startY;
+        if (event.touches.length === 1 && this.isDragging) {
+            const touch = event.touches[0];
+            const dx = touch.clientX - this.startX;
+            const dy = touch.clientY - this.startY;
             this.lon = this.startLon - dx * 0.3;
             this.lat = this.startLat + dy * 0.3;
-
-            // 速度を記録（慣性用）
-            this.velocityLon = (e.touches[0].clientX - this.lastX) * 0.3;
-            this.velocityLat = (e.touches[0].clientY - this.lastY) * 0.3;
-            this.lastX = e.touches[0].clientX;
-            this.lastY = e.touches[0].clientY;
+            this.velocityLon = (touch.clientX - this.lastX) * 0.3;
+            this.velocityLat = (touch.clientY - this.lastY) * 0.3;
+            this.lastX = touch.clientX;
+            this.lastY = touch.clientY;
             this.needsRender = true;
-        } else if (e.touches.length === 2) {
-            const dx = e.touches[0].clientX - e.touches[1].clientX;
-            const dy = e.touches[0].clientY - e.touches[1].clientY;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            const scale = this.lastTouchDist / dist;
-            this.fov = Math.max(this.minFov, Math.min(this.maxFov, this.startFov * scale));
-            this.needsRender = true;
+        } else if (event.touches.length === 2) {
+            const dx = event.touches[0].clientX - event.touches[1].clientX;
+            const dy = event.touches[0].clientY - event.touches[1].clientY;
+            const distance = Math.hypot(dx, dy);
+            if (distance > 0 && this.lastTouchDist > 0) {
+                const scale = this.lastTouchDist / distance;
+                this.fov = Math.max(this.minFov, Math.min(this.maxFov, this.startFov * scale));
+                this.needsRender = true;
+            }
         }
     }
 
@@ -441,20 +609,17 @@ export class PanoramaViewer {
             this.disableSensorMode();
             return false;
         }
-        return await this.enableSensorMode();
+        return this.enableSensorMode();
     }
 
     async enableSensorMode() {
-        // iOS 13+ では権限が必要
         if (typeof DeviceOrientationEvent !== 'undefined' &&
             typeof DeviceOrientationEvent.requestPermission === 'function') {
             try {
                 const response = await DeviceOrientationEvent.requestPermission();
-                if (response !== 'granted') {
-                    return false;
-                }
-            } catch (e) {
-                console.error(e);
+                if (response !== 'granted') return false;
+            } catch (error) {
+                console.error(error);
                 return false;
             }
         }
@@ -481,39 +646,32 @@ export class PanoramaViewer {
         this.needsRender = true;
     }
 
-    onDeviceOrientation(e) {
+    onDeviceOrientation(event) {
         if (!this.sensorMode) return;
 
-        let beta = e.beta || 0;   // 前後傾き (-180〜180)
-        let gamma = e.gamma || 0; // 左右傾き (-90〜90)
+        let beta = event.beta || 0;
+        let gamma = event.gamma || 0;
 
-        // 境界値のラップアラウンド処理
         if (beta > 150) beta -= 360;
         if (beta < -150) beta += 360;
         if (gamma > 80) gamma -= 180;
         if (gamma < -80) gamma += 180;
 
-        // 初回は基準値を設定
         if (this.baseBeta === null || this.baseGamma === null) {
             this.baseBeta = beta;
             this.baseGamma = gamma;
         }
 
-        // 平滑化（移動平均）
         const alpha = 0.15;
         this.smoothBeta = this.smoothBeta * (1 - alpha) + (beta - this.baseBeta) * alpha;
         this.smoothGamma = this.smoothGamma * (1 - alpha) + (gamma - this.baseGamma) * alpha;
 
-        // beta → lat（上下）, gamma → lon（左右）
-        // gamma 2倍スケールで視野移動を自然に
         this.lat = Math.max(-85, Math.min(85, this.smoothBeta));
         this.lon = this.smoothGamma * 2.0;
-
         this.needsRender = true;
     }
 
     onOrientationChange() {
-        // 画面回転時に基準値をリセット
         this.resetSensorBase();
     }
 
@@ -525,14 +683,30 @@ export class PanoramaViewer {
     // ----- 破棄 -----
     destroy() {
         cancelAnimationFrame(this.animationId);
-        this.resizeObserver.disconnect();
+        if (this.resizeObserver) this.resizeObserver.disconnect();
+
+        if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+            this.mediaRecorder.stop();
+        }
+        this.cleanupRecordingStreams();
+        this.mediaRecorder = null;
+        this.recordedChunks = [];
+        this.isRecording = false;
+
         this.disposeCurrent();
         this.disableSensorMode();
 
-        // window イベントを削除
+        this.canvas.removeEventListener('mousedown', this._onMouseDown);
+        this.canvas.removeEventListener('wheel', this._onWheel);
+        this.canvas.removeEventListener('touchstart', this._onTouchStart);
+        this.canvas.removeEventListener('touchmove', this._onTouchMove);
+        this.canvas.removeEventListener('touchend', this._onTouchEnd);
         window.removeEventListener('mousemove', this._onMouseMove);
         window.removeEventListener('mouseup', this._onMouseUp);
 
-        this.renderer.dispose();
+        if (this.renderer) {
+            this.renderer.dispose();
+            this.renderer = null;
+        }
     }
 }
